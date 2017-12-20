@@ -1,6 +1,7 @@
 package com.compucafe.executordemo;
 
 import lombok.Getter;
+import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,7 +37,7 @@ public class ExecutorContainer implements Runnable {
     }
 
     public void run() {
-        List<Future<Boolean>> futures = new ArrayList<Future<Boolean>>();
+        List<Future<RunnerTask>> futures = new ArrayList<Future<RunnerTask>>();
         LOG.info("exec thread started.");
         for (int i = 1; i < numThreads + 1; i++) {
             try {
@@ -48,16 +49,16 @@ public class ExecutorContainer implements Runnable {
             }
             RunnerTask rt = new RunnerTask("task-" + i);
             LOG.info("Starting task: " + rt.getName() + " 0x" + Integer.toHexString(rt.hashCode()));
-            ListenableFuture<Boolean> lf = executor.submitListenable(rt);
-            lf.addCallback(new ListenableFutureCallback<Boolean>() {
+            ListenableFuture<RunnerTask> lf = executor.submitListenable(rt);
+            lf.addCallback(new ListenableFutureCallback<RunnerTask>() {
                 @Override
                 public void onFailure(Throwable throwable) {
                     LOG.info("Failure of thread", throwable);
                 }
 
                 @Override
-                public void onSuccess(Boolean aBoolean) {
-                    LOG.info("Successful callback.");
+                public void onSuccess(RunnerTask task) {
+                    LOG.info("Successful callback. task:" + ToStringBuilder.reflectionToString(task));
                 }
             });
             futures.add(lf);
@@ -80,15 +81,18 @@ public class ExecutorContainer implements Runnable {
 
     }
 
-    static class RunnerTask implements Callable<Boolean> {
+    static class RunnerTask implements Callable<RunnerTask> {
         @Getter
         String name;
+
+        @Getter Boolean result;
+        @Getter Throwable thrown;
 
         RunnerTask(String name) {
             this.name = name;
         }
 
-        public Boolean call() throws Exception {
+        public RunnerTask call() throws Exception {
             long waitTime = (long) (Math.random() * 30000);
             LOG.info(String.format("[%s] 0x[%s] Sleeping for [%d] milliseconds...", name,
                     Integer.toHexString(this.hashCode()), waitTime));
@@ -112,19 +116,24 @@ public class ExecutorContainer implements Runnable {
                     break;
                 case 1:
                     retVal = false;
-                    throw new Exception("throw checked exception");
+                    thrown = new Exception("throw checked exception");
+                    throw (Exception)thrown;
                 case 0:
                     retVal = false;
-                    throw new RuntimeException("throw unchecked exception.");
+                    thrown = new RuntimeException("throw unchecked exception.");
+                    throw (RuntimeException)thrown;
                 default:
                     retVal = false;
-                    throw new Exception("Unknown case for switch statement. value: " + actionCode);
+                    thrown = new Exception("Unknown case for switch statement. value: " + actionCode);
+                    throw (RuntimeException)thrown;
             }
 
 
             LOG.info(String.format("[%s] 0x[%s] thread slept for [%d] milliseconds, returning [%s]", name,
                     Integer.toHexString(this.hashCode()), waitTime, retVal));
-            return retVal;
+            result = retVal;
+
+            return this;
         }
     }
 }
