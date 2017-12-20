@@ -24,7 +24,7 @@ public class ExecutorContainer implements Runnable {
     @Autowired
     ThreadPoolTaskExecutor executor;
 
-    @Value("${com.cfa.executordemo.numTestThreads:50}")
+    @Value("${com.compucafe.executor-demo.numTestThreads:50}")
     Integer numThreads;
 
     @PostConstruct
