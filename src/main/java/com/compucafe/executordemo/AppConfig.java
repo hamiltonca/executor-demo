@@ -20,9 +20,11 @@ public class AppConfig {
     int keepAliveSeconds;
     @Value("${com.compucafe.executor-demo.threadNamePrefix:tpExec-}")
     String threadNamePrefix;
+    @Value("${com.compucafe.executor-demo.allowCoreThreadTimeout:true}")
+    Boolean allowCoreThreadTimeout;
 
     @Bean
-    ThreadPoolTaskExecutor getThreadPoolTaskExecutor() {
+    ThreadPoolTaskExecutor threadPoolTaskExecutor() {
         log.info(String.format("Configuring ThreadPoolTaskExecutor with corePoolSize: [%d], maxPoolSize: [%d], queueCapacity: [%d] keepAliveSeconds: [%d], threadNamePrefix: [%s]",
                 corePoolSize, maxPoolSize, queueCapacity, keepAliveSeconds, threadNamePrefix));
         ThreadPoolTaskExecutor retBean = new ThreadPoolTaskExecutor();
@@ -31,6 +33,7 @@ public class AppConfig {
         retBean.setQueueCapacity(queueCapacity);
         retBean.setKeepAliveSeconds(keepAliveSeconds);
         retBean.setThreadNamePrefix(threadNamePrefix);
+        retBean.setAllowCoreThreadTimeOut(allowCoreThreadTimeout);
 
         return retBean;
     }

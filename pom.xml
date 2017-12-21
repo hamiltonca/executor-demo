@@ -11,11 +11,14 @@
 	<name>executor-demo</name>
 	<description>Demo project ThreadPoolTaskExecutor</description>
 	<url>http://</url>
-	<contributors>
-		<contributor>
+	<scm>
+		<url>https://github.com/hamiltonca/executor-demo.git</url>
+	</scm>
+	<developers>
+		<developer>
 			<name>Chris Hamilton</name>
-		</contributor>
-	</contributors>
+		</developer>
+	</developers>
 
 	<organization>
 		<name>CompuCafe.com</name>
