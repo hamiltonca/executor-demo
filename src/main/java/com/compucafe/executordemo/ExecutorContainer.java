@@ -4,9 +4,10 @@ import lombok.Getter;
 import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -18,7 +19,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 
 @Component
-public class ExecutorContainer implements Runnable, InitializingBean {
+public class ExecutorContainer implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ExecutorContainer.class);
 
@@ -28,18 +29,37 @@ public class ExecutorContainer implements Runnable, InitializingBean {
     @Value("${com.compucafe.executor-demo.numTestThreads:50}")
     Integer numThreads;
 
-    public void afterPropertiesSet() throws Exception {
-        LOG.info("afterPropertiesSet called...");
-        initialize();
-    }
+    @Value("${com.compucafe.executor-demo.submitRetryWaitMs:5000}")
+    long submitRetryWaitMs;
 
-    //    @PostConstruct
-    public void initialize() {
+    @Value("${com.compucafe.executor-demo.submitWaitMs:250}")
+    long submitWaitMs;
+
+    @Value("${com.compucafe.executor-demo.taskPollWaitMs:1000}")
+    long taskPollWaitMs;
+
+    boolean running = false;
+
+
+    private void initialize() {
         LOG.info("initialize called.");
         Thread execThread = new Thread(this);
         execThread.setName("execThread");
         execThread.start();
+        synchronized (this) {
+            running = true;
+        }
     }
+
+    @EventListener
+    public void handleRefresh(ContextRefreshedEvent event) {
+        LOG.info("Context event received: " + ToStringBuilder.reflectionToString(event));
+        if (!running) {
+            initialize();
+        }
+        LOG.debug("DEBUG enabled.");
+    }
+
 
     public void run() {
         List<Future<RunnerTask>> futures = new ArrayList<Future<RunnerTask>>();
@@ -47,12 +67,12 @@ public class ExecutorContainer implements Runnable, InitializingBean {
         for (int i = 1; i < numThreads + 1; i++) {
             try {
                 synchronized (this) {
-                    wait(250L);
+                    wait(submitWaitMs);
                 }
             } catch (InterruptedException ie) {
                 LOG.error("Interrupted thread!");
             }
-            RunnerTask rt = new RunnerTask("task-" + i);
+            RunnerTask rt = new RunnerTask(String.format("task-%03d", i));
             LOG.info("Starting task: " + rt.getName() + " 0x" + Integer.toHexString(rt.hashCode()));
             ListenableFuture<RunnerTask> lf = null;
             try {
@@ -61,7 +81,7 @@ public class ExecutorContainer implements Runnable, InitializingBean {
                 LOG.warn("Failed to submit task " + rt.getName() + " waiting for 5 seconds before trying again...");
                 try {
                     synchronized (this) {
-                        wait(5000);
+                        wait(submitRetryWaitMs);
                     }
                 } catch (InterruptedException ie) {
                     LOG.warn("Exception waiting to restart submitting tasks...");
@@ -76,9 +96,19 @@ public class ExecutorContainer implements Runnable, InitializingBean {
             }
             if (lf != null) {
                 lf.addCallback(success -> {
-                    LOG.info("success... " + ToStringBuilder.reflectionToString(success));
+                    LOG.info("[" + success.getName() + "] success... " +  ToStringBuilder.reflectionToString(success));
+                    synchronized (this) {
+                        notify();
+                    }
                 }, failure -> {
-                    LOG.info("failure..." + ToStringBuilder.reflectionToString(failure));
+                    LOG.info("failure..." + ToStringBuilder.reflectionToString(failure) +
+                            " this: " + ToStringBuilder.reflectionToString(this));
+                    if (failure instanceof ExecutorException) {
+                        LOG.info("[" + ((ExecutorException) failure).getFailedTask().getName() + "] " + ((ExecutorException) failure).getFailedTask().toString(), failure.getCause());
+                    }
+                    synchronized (this) {
+                        notify();
+                    }
                 });
                 futures.add(lf);
             }
@@ -88,9 +118,12 @@ public class ExecutorContainer implements Runnable, InitializingBean {
         while (active > 0) {
             synchronized (this) {
                 try {
-                    wait(1000L);
+                    long timeWaitStarted = System.currentTimeMillis();
+                    wait(taskPollWaitMs);
+                    long timeRemianing = System.currentTimeMillis() - timeWaitStarted;
+                    LOG.debug(String.format("thread notified. time remaining (millis) [%d]", timeRemianing));
                 } catch (InterruptedException ie) {
-                    LOG.error("thread interrupted...");
+                    LOG.error("thread interrupted...", ie);
                 }
             }
             active = executor.getActiveCount();
@@ -122,40 +155,53 @@ public class ExecutorContainer implements Runnable, InitializingBean {
                 try {
                     wait(waitTime);
                 } catch (InterruptedException ie) {
-                    LOG.info("Thread interrupted...");
+                    LOG.info("Thread interrupted...", ie);
                 }
             }
-            boolean   retVal     = true;
+
             Throwable t          = null;
             int       actionCode = (int) (Math.random() * 4);
             LOG.info("actionCode: " + actionCode);
             switch (actionCode) {
                 case 3:
-                    retVal = true;
+                    result = true;
                     break;
                 case 2:
-                    retVal = false;
+                    result = false;
                     break;
                 case 1:
-                    retVal = false;
-                    thrown = new Exception("throw checked exception");
-                    throw (Exception) thrown;
+                    result = false;
+                    Exception ex = new Exception("Thrown from Runnertask");
+                    ex.fillInStackTrace();
+                    throw new ExecutorException("throw checked exception", ex, this);
                 case 0:
-                    retVal = false;
-                    thrown = new RuntimeException("throw unchecked exception.");
-                    throw (RuntimeException) thrown;
+                    result = false;
+                    RuntimeException rex = new RuntimeException("Thrown in RunnerTask");
+                    rex.fillInStackTrace();
+                    throw new ExecutorException("throw unchecked exception.", rex, this);
                 default:
-                    retVal = false;
-                    thrown = new Exception("Unknown case for switch statement. value: " + actionCode);
-                    throw (RuntimeException) thrown;
+                    result = false;
+                    throw new ExecutorException("Unknown case for switch statement. value: " + actionCode, null, this);
             }
 
 
             LOG.info(String.format("[%s] 0x[%s] thread slept for [%d] milliseconds, returning [%s]", name,
-                    Integer.toHexString(this.hashCode()), waitTime, retVal));
-            result = retVal;
+                    Integer.toHexString(this.hashCode()), waitTime, result));
+
 
             return this;
         }
+        public String toString() {
+            return new ToStringBuilder(this).append(this.name).append(this.result).append(this.thrown).toString();
+        }
     }
+    public static class ExecutorException extends Exception {
+        @Getter
+        RunnerTask failedTask;
+        ExecutorException(String msg, Throwable cause, RunnerTask task) {
+            super(msg, cause);
+            failedTask = task;
+        }
+    }
+
 }
